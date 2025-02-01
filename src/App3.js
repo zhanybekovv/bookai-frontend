@@ -6,7 +6,19 @@ function App() {
   const [transcript, setTranscript] = useState([]);
   let pc = useRef(new RTCPeerConnection());
   let localStream = useRef(null);
+  console.log('process.env', process.env)
+  async function fetchTavilyResults(query) {
+    const TAVILY_API_KEY = "your-tavily-api-key"; // Replace with actual key
+    const response = await fetch("https://api.tavily.com/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: process.env.REACT_APP_TAVILY_API_KEY, query, num_results: 3 })
+    });
 
+    const data = await response.json();
+    console.log('data', data);
+    return data.results.map(res => res.content).join("\n");
+}
   async function init() {
     // Get OpenAI token
     const tokenResponse = await fetch("http://localhost:5000/session");
@@ -24,11 +36,27 @@ function App() {
   
     // Set up data channel for events
     const dc = pc.current.createDataChannel("oai-events");
-    dc.addEventListener("message", (e) => {
+    dc.addEventListener("message", async (e) => {
       const { item } = JSON.parse(e.data);
-      if (item?.content && item?.content?.length > 0) {
-        setTranscript(prev => [...prev, item.content[0].transcript]);
-      }
+      if (item?.content?.[0]?.transcript) {
+        let transcript = item.content[0].transcript;
+        console.log("User Transcript:", transcript);
+        setTranscript(prev => [...prev, transcript]);
+
+        // 🔥 Step 1: Detect if User Needs Live Data
+        if (/weather|news|latest/i.test(transcript)) {
+            console.log("Fetching live web data for:", transcript);
+            const searchResults = await fetchTavilyResults(transcript);
+            const responseCreate = {
+              type: "response.create",
+              response: {
+                input: [],
+                instructions: `Get the info from this text, and say the weather: ${searchResults}`,
+              },
+            };
+            dc.send(JSON.stringify(responseCreate));
+        }
+    }
     });
   
     // Start WebRTC session
@@ -47,13 +75,12 @@ function App() {
     });
   
     const sdp = await sdpResponse.text();
-    console.log('sdp', sdp);
     const answer = { type: "answer", sdp };
     await pc.current.setRemoteDescription(answer);
   }
   
   
-  const handleToggleRecording = async () => {
+  const handleToggleRecording = () => {
     if (isRecording) {
       pc.current.getSenders().forEach(sender => pc.current.removeTrack(sender));
       pc.current.ontrack = null;
@@ -66,7 +93,7 @@ function App() {
   
       pc.current = new RTCPeerConnection();
     } else {
-      await init();
+        init();
     }
   
     setIsRecording(!isRecording);
